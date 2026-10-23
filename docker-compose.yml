@@ -15,7 +15,12 @@ services:
     restart: unless-stopped
 
   artex:
-    image: autumn27/artex:${ARTEX_TAG:-latest}
+    # 二开版：默认用**本地构建**的镜像，不再拉上游 autumn27/artex。
+    # 首次 up 加 --build（或用 ./install.sh 选 ①），构建走 Dockerfile.selfbuild，宿主机不需要 Go/Node。
+    image: ${ARTEX_IMAGE:-artex}:${ARTEX_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile.selfbuild
     depends_on:
       postgres:
         condition: service_healthy

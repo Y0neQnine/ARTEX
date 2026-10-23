@@ -1,0 +1,52 @@
+# 二开自构建镜像：前端静态导出 + Go 内嵌编译 + 运行时，全在容器里完成，
+# 宿主机只需要 docker（方式一「全部 Docker」用的就是它，不再拉上游镜像）。
+# 已经准备好 dist/<arch>/artex 时，用仓库自带的 Dockerfile 更快（只装工具、直接放二进制）。
+#
+# 构建：docker build -f Dockerfile.selfbuild -t artex:local .
+
+# ── ① 前端静态导出 ──────────────────────────────
+FROM --platform=$BUILDPLATFORM node:22-slim AS webui
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build:static
+
+# ── ② 后端编译（内嵌前端产物）───────────────────
+FROM --platform=$BUILDPLATFORM golang:1.26 AS binary
+# golang 官方镜像默认 GOTOOLCHAIN=local，go.mod 的 `go 1.26.3` 若比镜像里的补丁号新会直接报错。
+ENV GOTOOLCHAIN=auto
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . ./
+COPY --from=webui /src/web/out server/webui/dist
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+      go build -tags embedui -trimpath -ldflags "-s -w" -o /out/artex ./cmd/artex
+
+# ── ③ 运行时（与 Dockerfile 保持一致）───────────
+FROM python:3.12-slim-bookworm
+# 常用工具：ripgrep / curl / vim，加一批 recon 常备件（按需增删）。
+# Node 从 NodeSource 装 20.x：bookworm 自带的 apt nodejs 是 18，Playwright 要求 >=20。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates ripgrep curl wget vim git jq unzip \
+      dnsutils iputils-ping netcat-openbsd inetutils-telnet whois nmap \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+# 预装 Playwright MCP 与 CLI（全局），运行时不再 npx 联网下载。
+RUN npm install -g @playwright/mcp@latest @playwright/cli@latest playwright@latest \
+    && playwright-cli --help \
+    && playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=binary /out/artex /app/artex
+COPY start.sh /app/start.sh
+RUN chmod +x /app/artex /app/start.sh
+COPY skills/ /app/skills/
+VOLUME ["/app/data"]
+EXPOSE 8787 8788
+ENTRYPOINT ["/app/start.sh"]
+CMD ["-addr", ":8787", "-proxy", ":8788"]

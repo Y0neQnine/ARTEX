@@ -30,7 +30,27 @@ ensure_docker(){
   esac
 }
 
-# ── ① 全部 Docker ───────────────────────────────
+# ── ① 全部 Docker（本地构建二开版镜像，不拉上游） ──────
+# 读 .env 里的 ARTEX_IMAGE / ARTEX_TAG，缺省 artex:local
+image_ref(){
+  local name tag
+  name="$(sed -n 's|^ARTEX_IMAGE=||p' .env 2>/dev/null | tail -1)"; tag="$(sed -n 's|^ARTEX_TAG=||p' .env 2>/dev/null | tail -1)"
+  echo "${name:-artex}:${tag:-local}"
+}
+# 有预编译二进制就用 Dockerfile（只装工具、放二进制），否则用 Dockerfile.selfbuild 在容器里编译
+build_image(){
+  local ref arch
+  ref="$(image_ref)"; arch="$(uname -m)"
+  case "$arch" in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) arch=amd64 ;; esac
+  if [ -f "dist/${arch}/artex" ]; then
+    info "检测到预编译二进制 dist/${arch}/artex，用它构建（快）…"
+    docker build -t "$ref" .
+  else
+    info "无预编译二进制，容器内编译前端 + 后端（首次约 10–20 分钟）…"
+    docker build -f Dockerfile.selfbuild -t "$ref" .
+  fi
+  ok "镜像就绪：$ref"
+}
 install_docker(){
   ensure_docker
   if [ ! -f .env ]; then
@@ -45,11 +65,13 @@ install_docker(){
   else
     info "沿用已存在的 .env"
   fi
-  info "拉取镜像并启动…"
-  docker compose pull || true
+  build_image
+  info "启动…"
+  docker compose pull postgres || true
   docker compose up -d
   ok "启动完成 → http://localhost:8787"
   info "查看日志：docker compose logs -f artex"
+  info "改代码后重新构建：./install.sh 选 ①，或 docker compose up -d --build"
 }
 
 # ── ② 本地编译运行 ──────────────────────────────

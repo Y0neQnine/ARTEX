@@ -24,6 +24,16 @@
 
 - 新增 `webshells` 表（`db/schema.sql` 的幂等 DDL，**重启即自动建表**，无需手工迁移）；任务删除时相关记录置空 `task_id` 而非级联删除，避免误删战果记录。
 
+### 部署
+
+#### 变更的内容
+
+- **方式一「全部 Docker」改为本地构建二开版镜像**：原先 `install.sh` 选 ① 会 `docker compose pull` 拉上游 `autumn27/artex`，而那个镜像里**没有 WebShell 功能**，装完页面是空的。现在 compose 默认镜像改成 `${ARTEX_IMAGE:-artex}:${ARTEX_TAG:-local}` 并声明 `build: Dockerfile.selfbuild`，`./install.sh` 选 ① 直接在容器里编译前端 + 后端产出 `artex:local`（宿主机不需要 Go/Node）；已有 `dist/<arch>/artex` 时自动走只装工具层的快路径。`update.sh` 的 ① 同步由 `docker compose pull artex` 改成 `docker compose build artex`。
+- **新增 `Dockerfile.selfbuild`**：node 静态导出 → go `-tags embedui` 内嵌编译 → python 运行时三段式，运行时层与 `Dockerfile` 一致。
+- **两个 Dockerfile 都不再写 `# syntax=docker/dockerfile:1`**：该指令让 BuildKit 去 `auth.docker.io` 取前端镜像，只配了 registry 镜像源、无法直连 Docker Hub 的主机会直接构建失败，而用到的指令内置前端全都支持。
+- **页面一键更新的发布源指向本 fork**（`selfupdate.Repo` → `Y0neQnine/artex`）：仍指上游的话，「检查更新」会把**没有 WebShell 的官方二进制**下载过来覆盖本地构建；fork 未发 Release 时该卡片显示「尚未发布任何正式版本」，不会误装。
+
+
 ## [0.3.15] - 2026-10-07
 
 ### 拦截

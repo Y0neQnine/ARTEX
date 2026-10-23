@@ -138,7 +138,7 @@ export function UpdateCard() {
         "更新会重启程序，正在运行的任务会被中断。\n" +
         (info.mode === "docker"
           ? "\n注意：容器内更新只替换程序本身，不会更新镜像里的 playwright / nmap 等工具链；" +
-            "若新版本依赖新工具，请改用 docker compose pull。"
+            "若新版本依赖新工具，请重新构建镜像：docker compose build artex。"
           : ""),
     );
     if (!ok) return;
@@ -270,7 +270,11 @@ export function UpdateCard() {
             Docker 下的更新只替换程序本身，不更新镜像里的 playwright / nmap 等工具链，且
             <span className="font-mono"> docker compose up -d </span>
             重建容器后会退回镜像自带的版本。需要连镜像一起升级请执行
-            <span className="font-mono"> docker compose pull artex &amp;&amp; docker compose up -d artex</span>。
+            <span className="font-mono">
+              {" "}
+              docker compose build artex &amp;&amp; docker compose up -d --no-build artex
+            </span>
+            。
           </p>
         )}
 
