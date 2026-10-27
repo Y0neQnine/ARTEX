@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/url"
@@ -32,6 +33,8 @@ const (
 	webshellExecTimeout  = 60 * time.Second
 	webshellCheckTimeout = 15 * time.Second
 	maxWebshellOutBytes  = 1 << 20 // 回传前端的输出上限，1MB
+	// 上传一个文件要走「base64 文本 → 脚本 → 分块请求」，请求体留给 8MB 原始内容。
+	maxWebshellFSRequestBytes = 12 << 20
 )
 
 // webshellDTO 是前后端共用的 WebShell 快照。
@@ -46,6 +49,9 @@ type webshellDTO struct {
 	ShellType   string `json:"shell_type"`
 	ShellLabel  string `json:"shell_label"`
 	Param       string `json:"param"`
+	Crypto      string `json:"crypto,omitempty"`
+	Secret      string `json:"secret,omitempty"`
+	SecretKey   string `json:"secret_key,omitempty"`
 	OSType      string `json:"os_type"`
 	ExecMode    string `json:"exec_mode"`
 	InsecureTLS bool   `json:"insecure_tls"`
@@ -68,6 +74,9 @@ type webshellRequest struct {
 	URL         *string `json:"url"`
 	ShellType   *string `json:"shell_type"`
 	Param       *string `json:"param"`
+	Crypto      *string `json:"crypto"`
+	Secret      *string `json:"secret"`
+	SecretKey   *string `json:"secret_key"`
 	OSType      *string `json:"os_type"`
 	ExecMode    *string `json:"exec_mode"`
 	InsecureTLS *bool   `json:"insecure_tls"`
@@ -95,6 +104,9 @@ func toWebshellDTO(w *db.DBWebshell) webshellDTO {
 		ShellType:   w.ShellType,
 		ShellLabel:  webshellLabel(w.ShellType),
 		Param:       w.Param,
+		Crypto:      w.Crypto,
+		Secret:      w.Secret,
+		SecretKey:   w.SecretKey,
 		OSType:      w.OSType,
 		ExecMode:    w.ExecMode,
 		InsecureTLS: w.InsecureTLS,
@@ -114,7 +126,8 @@ func toWebshellDTO(w *db.DBWebshell) webshellDTO {
 
 // validateWebshell 校验落库前的字段；返回可直接写给用户的原因。
 func validateWebshell(w *db.DBWebshell) string {
-	if !webshell.ValidType(w.ShellType) {
+	d, ok := webshell.Lookup(w.ShellType)
+	if !ok {
 		return "不支持的 WebShell 类型"
 	}
 	switch w.ExecMode {
@@ -138,6 +151,22 @@ func validateWebshell(w *db.DBWebshell) string {
 	}
 	if msg := webshellURLError(w.URL); msg != "" {
 		return msg
+	}
+	if utf8.RuneCountInString(w.Secret) > 128 || utf8.RuneCountInString(w.SecretKey) > 128 {
+		return "口令或密钥过长"
+	}
+	if d.ParamUnused {
+		// 加密马不靠普通参数收命令；口令与加密方式的校验见下。
+		if c := strings.TrimSpace(w.Crypto); c != "" && !d.HasCrypto(c) {
+			return "该类型不支持这个加密方式"
+		}
+		if webshell.IsEncryptedType(w.ShellType) && strings.TrimSpace(w.Secret) == "" {
+			return "连接口令不能为空"
+		}
+		return ""
+	}
+	if d.Family == webshell.FamilyArtexCrypt && strings.TrimSpace(w.Secret) == "" {
+		return "连接口令不能为空"
 	}
 	if p := strings.TrimSpace(w.Param); p == "" || !isWebshellParamName(p) {
 		return "连接参数名只能包含字母、数字、下划线、点、中划线"
@@ -183,6 +212,9 @@ func (s *Server) webshellTarget(w *db.DBWebshell) *webshell.Target {
 		Param:       w.Param,
 		OSType:      w.OSType,
 		InsecureTLS: w.InsecureTLS,
+		Secret:      w.Secret,
+		SecretKey:   w.SecretKey,
+		Crypto:      w.Crypto,
 	}
 }
 
@@ -253,12 +285,19 @@ func (s *Server) webshellTypes(w http.ResponseWriter, _ *http.Request) {
 	items := make([]map[string]any, 0, len(webshell.Types()))
 	for _, d := range webshell.Types() {
 		items = append(items, map[string]any{
-			"type":          d.Type,
-			"label":         d.Label,
-			"filename":      d.Filename,
-			"default_param": d.DefaultParam,
-			"code_mode":     d.CodeMode,
-			"note":          d.Note,
+			"type":               d.Type,
+			"label":              d.Label,
+			"filename":           d.Filename,
+			"default_param":      d.DefaultParam,
+			"code_mode":          d.CodeMode,
+			"note":               d.Note,
+			"family":             d.Family,
+			"language":           d.Language,
+			"param_unused":       d.ParamUnused,
+			"cryptos":            d.Cryptos,
+			"default_crypto":     d.DefaultCrypto,
+			"default_secret":     d.DefaultSecret,
+			"default_secret_key": d.DefaultSecretKey,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"types": items})
@@ -402,20 +441,33 @@ func (s *Server) execWebshell(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "执行方式无效")
 		return
 	}
-	plan, err := webshell.Build(s.webshellTarget(row), mode, input)
-	if err != nil {
-		msg := "命令构造失败"
-		if errors.Is(err, webshell.ErrModeNotSupported) {
-			msg = err.Error()
+	target := s.webshellTarget(row)
+	var out *webshell.Outcome
+	var err error
+	if webshell.IsEncryptedType(row.ShellType) {
+		out, err = webshell.ExecMode(r.Context(), target, mode, input, webshellExecTimeout)
+	} else {
+		plan, berr := webshell.Build(target, mode, input)
+		if berr != nil {
+			msg := "命令构造失败"
+			if errors.Is(berr, webshell.ErrModeNotSupported) {
+				msg = berr.Error()
+			}
+			writeErr(w, http.StatusBadRequest, msg)
+			return
 		}
-		writeErr(w, http.StatusBadRequest, msg)
-		return
+		out, err = webshell.Run(r.Context(), target, plan, webshellExecTimeout)
 	}
-	out, err := webshell.Run(r.Context(), s.webshellTarget(row), plan, webshellExecTimeout)
 	if err != nil {
-		_ = s.m.pg.SetWebshellStatus(row.ID, db.WebshellDead, err.Error())
+		msg := err.Error()
+		if errors.Is(err, webshell.ErrModeNotSupported) || errors.Is(err, webshell.ErrXPayloadTooBig) ||
+			errors.Is(err, webshell.ErrXProtocol) || errors.Is(err, webshell.ErrEmptyInput) {
+			writeErr(w, http.StatusBadRequest, msg)
+			return
+		}
+		_ = s.m.pg.SetWebshellStatus(row.ID, db.WebshellDead, msg)
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok": false, "error": err.Error(), "output": "", "parsed": false,
+			"ok": false, "error": msg, "output": "", "parsed": false,
 		})
 		return
 	}
@@ -433,6 +485,120 @@ func (s *Server) execWebshell(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// fsWebshell POST /api/webshells/{id}/fs —— 文件管理统一入口。
+//
+// 和命令执行一样，目标地址只取自 webshells 表；路径与内容由用户提供，最终以
+// base64 嵌进脚本，不参与 shell 拼接。OS 未指定时先探测一次并回写记录。
+func (s *Server) fsWebshell(w http.ResponseWriter, r *http.Request) {
+	row, ok := s.loadWebshell(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Op         string `json:"op"`
+		Path       string `json:"path"`
+		From       string `json:"from"`
+		To         string `json:"to"`
+		ContentB64 string `json:"content_b64"`
+		Mode       string `json:"mode"`
+		Recursive  bool   `json:"recursive"`
+		OS         string `json:"os"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxWebshellFSRequestBytes)
+	if err := decode(r, &body); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	target := s.webshellTarget(row)
+	os := row.OSType
+	if v := strings.TrimSpace(body.OS); v == webshell.OSLinux || v == webshell.OSWindows {
+		os = v
+	}
+	if os == "" {
+		detected, err := webshell.DetectOS(r.Context(), target, webshellExecTimeout)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "自动识别目标系统失败：" + err.Error()})
+			return
+		}
+		os = detected
+		_ = s.m.pg.SetWebshellOS(row.ID, os)
+	}
+
+	start := time.Now()
+	resp := map[string]any{"ok": true, "os": os}
+	var opErr error
+	switch strings.TrimSpace(body.Op) {
+	case webshell.FsList:
+		res, err := webshell.List(r.Context(), target, os, body.Path, webshellExecTimeout)
+		opErr = err
+		if err == nil {
+			resp["data"] = res
+		}
+	case webshell.FsRead:
+		if strings.TrimSpace(body.Path) == "" {
+			writeErr(w, http.StatusBadRequest, "请提供文件路径")
+			return
+		}
+		var res *webshell.FSRead
+		res, opErr = webshell.Read(r.Context(), target, os, body.Path, webshell.DefaultReadLimit, webshellExecTimeout)
+		if opErr == nil {
+			resp["data"] = map[string]any{
+				"path":        res.Path,
+				"size":        res.Size,
+				"content_b64": base64.StdEncoding.EncodeToString(res.Data),
+			}
+		}
+	case webshell.FsWrite:
+		if strings.TrimSpace(body.Path) == "" {
+			writeErr(w, http.StatusBadRequest, "请提供文件路径")
+			return
+		}
+		raw, err := base64.StdEncoding.DecodeString(body.ContentB64)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "content_b64 不是合法的 base64")
+			return
+		}
+		opErr = webshell.Write(r.Context(), target, os, body.Path, raw, webshellExecTimeout)
+		if opErr == nil {
+			resp["data"] = map[string]any{"path": webshell.NormalizeFSPath(os, body.Path), "bytes": len(raw)}
+		}
+	case webshell.FsMkdir:
+		if strings.TrimSpace(body.Path) == "" {
+			writeErr(w, http.StatusBadRequest, "请提供目录路径")
+			return
+		}
+		opErr = webshell.Mkdir(r.Context(), target, os, body.Path, webshellExecTimeout)
+	case webshell.FsDelete:
+		if strings.TrimSpace(body.Path) == "" {
+			writeErr(w, http.StatusBadRequest, "请提供要删除的路径")
+			return
+		}
+		opErr = webshell.Remove(r.Context(), target, os, body.Path, body.Recursive, webshellExecTimeout)
+	case webshell.FsRename:
+		if strings.TrimSpace(body.From) == "" || strings.TrimSpace(body.To) == "" {
+			writeErr(w, http.StatusBadRequest, "请提供原路径与新路径")
+			return
+		}
+		opErr = webshell.Rename(r.Context(), target, os, body.From, body.To, webshellExecTimeout)
+	case webshell.FsChmod:
+		if strings.TrimSpace(body.Path) == "" {
+			writeErr(w, http.StatusBadRequest, "请提供文件路径")
+			return
+		}
+		opErr = webshell.Chmod(r.Context(), target, os, body.Path, body.Mode, webshellExecTimeout)
+	default:
+		writeErr(w, http.StatusBadRequest, "不支持的文件操作")
+		return
+	}
+	if opErr != nil {
+		resp["ok"] = false
+		resp["error"] = opErr.Error()
+	}
+	resp["elapsed_ms"] = time.Since(start).Milliseconds()
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // webshellPayload 返回与该记录协议配套的马文件，供复制/下载后上传到目标。
 //
 // 两种入口共用：GET /api/webshells/{id}/payload（按已落库的配置生成）与
@@ -442,7 +608,14 @@ func (s *Server) webshellPayload(w http.ResponseWriter, r *http.Request) {
 	if pg == nil {
 		return
 	}
-	target := &webshell.Target{Type: strings.TrimSpace(r.URL.Query().Get("type")), Param: strings.TrimSpace(r.URL.Query().Get("param"))}
+	q := r.URL.Query()
+	target := &webshell.Target{
+		Type:      strings.TrimSpace(q.Get("type")),
+		Param:     strings.TrimSpace(q.Get("param")),
+		Crypto:    strings.TrimSpace(q.Get("crypto")),
+		Secret:    strings.TrimSpace(q.Get("secret")),
+		SecretKey: strings.TrimSpace(q.Get("secret_key")),
+	}
 	if idArg := r.PathValue("id"); idArg != "" {
 		id, err := strconv.ParseInt(idArg, 10, 64)
 		if err != nil || id <= 0 {
@@ -489,6 +662,15 @@ func applyWebshellRequest(row *db.DBWebshell, req *webshellRequest, create bool)
 	if req.Param != nil {
 		row.Param = strings.TrimSpace(*req.Param)
 	}
+	if req.Crypto != nil {
+		row.Crypto = strings.TrimSpace(*req.Crypto)
+	}
+	if req.Secret != nil {
+		row.Secret = strings.TrimSpace(*req.Secret)
+	}
+	if req.SecretKey != nil {
+		row.SecretKey = strings.TrimSpace(*req.SecretKey)
+	}
 	if req.OSType != nil {
 		row.OSType = strings.ToLower(strings.TrimSpace(*req.OSType))
 	}
@@ -525,11 +707,22 @@ func applyWebshellRequest(row *db.DBWebshell, req *webshellRequest, create bool)
 			row.FindingID = &v
 		}
 	}
-	if row.Param == "" {
-		for _, d := range webshell.Types() {
-			if d.Type == row.ShellType {
-				row.Param = d.DefaultParam
-				break
+	if d, ok := webshell.Lookup(row.ShellType); ok {
+		if row.Param == "" {
+			row.Param = d.DefaultParam
+		}
+		if d.Family == webshell.FamilyArtexCrypt && row.Secret == "" {
+			row.Secret = d.DefaultSecret
+		}
+		if d.ParamUnused {
+			if row.Crypto == "" {
+				row.Crypto = d.DefaultCrypto
+			}
+			if row.Secret == "" {
+				row.Secret = d.DefaultSecret
+			}
+			if row.SecretKey == "" {
+				row.SecretKey = d.DefaultSecretKey
 			}
 		}
 	}
@@ -545,9 +738,10 @@ func applyWebshellRequest(row *db.DBWebshell, req *webshellRequest, create bool)
 func webshellInputFromRow(row *db.DBWebshell, source, worker string) db.WebshellInput {
 	in := db.WebshellInput{
 		Name: row.Name, TaskID: row.TaskID, AssetID: row.AssetID, FindingID: row.FindingID,
-		URL: row.URL, ShellType: row.ShellType, Param: row.Param, OSType: row.OSType,
-		ExecMode: row.ExecMode, InsecureTLS: &row.InsecureTLS, Source: source, Worker: worker,
-		Note: row.Note,
+		URL: row.URL, ShellType: row.ShellType, Param: row.Param,
+		Crypto: row.Crypto, Secret: row.Secret, SecretKey: row.SecretKey,
+		OSType: row.OSType, ExecMode: row.ExecMode, InsecureTLS: &row.InsecureTLS,
+		Source: source, Worker: worker, Note: row.Note,
 	}
 	if source == "" {
 		in.Source = db.WebshellSourceManual
@@ -577,6 +771,7 @@ type pgWebshellRecorder struct{ pg *db.DB }
 func (r *pgWebshellRecorder) RegisterWebshell(_ context.Context, in agent.WebshellRecord) (int64, error) {
 	row := &db.DBWebshell{
 		Name: in.Name, URL: in.URL, ShellType: in.ShellType, Param: in.Param,
+		Crypto: in.Crypto, Secret: in.Secret, SecretKey: in.SecretKey,
 		OSType: in.OSType, ExecMode: webshell.ModeCommand, InsecureTLS: true, Note: in.Note,
 	}
 	if row.ShellType == "" {

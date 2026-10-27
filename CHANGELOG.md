@@ -11,13 +11,21 @@
 - **WebShell 连接页**：目标上的一句话马从此是「可连接的战果」而不只是一条事实记录。新增「功能 → WebShell」页，列出马的名称 / URL / 类型 / 参数名 / 存活状态 / 来源（agent 登记或手动录入）/ 所属任务与资产，支持搜索、状态筛选与分页，并可就地编辑或删除记录（只删记录，不动目标上的马文件）。
 - **agent 主动登记（`register_webshell`）**：worker 确认 getshell 后调用该工具把马写进 `webshells` 表，带上 `asset_id` / `finding_id` 便于回溯是哪条漏洞产出的 shell；planner 与主 agent 可用 `list_webshells` 先查已站住的脚，再规划横向与权限保持，避免重复种马。
 - **一键判活**：向目标发一条无害的 `echo artex_probe_ok` 探测，按回显标记判定存活 / 已掉并回写状态与失败原因；超时上限 15 秒，列表与终端面板都能手动触发。
-- **命令终端**：点开任意一条即打开右侧面板，一次下发一条命令并把输出贴回会话式历史；PHP eval / assert 型可切到代码模式直接执行 PHP 代码。执行走 60 秒超时，回传上限 1MB，超出截断标注。
-- **配套马文件生成**：按该条记录的类型与参数名生成对应源码（php / jsp / asp / aspx），页面可预览、复制、下载后上传到目标——客户端与马文件同源，不会出现「生成的马连不上」。参数名会拼进生成的源码，因此限制为字母数字与 `_ . -`。
-- **六种马形态，协议自定**：`php_eval / php_assert / php_cmd / jsp_runtime / asp_exec / aspx_exec`。回传内容用随机标记包裹后剥离，命令以 base64 经单个表单字段提交，避免用户输入落进代码字符串；**不兼容冰蝎、哥斯拉等加密流量框架**，接管那些马请仍用其官方客户端。
+- **命令终端**：点开任意一条即打开右侧面板，一次下发一条命令并把输出贴回会话式历史；PHP eval / assert 型可切到代码模式直接执行 PHP 代码。执行走 60 秒超时，回传上限 1MB，超出截断标注。终端支持 ↑/↓ 翻历史与一键清屏。
+- **文件管理（对标蚁剑 / 冰蝎的文件面板）**：新增「文件」页签——列目录、进出目录与路径直达、文本文件在线查看 / 编辑保存、二进制文件下载、上传、新建文件 / 目录、重命名、改权限（Linux）、删除（目录可递归）。目标系统首次操作时自动探测并回写 `webshells.os_type`（`echo %OS%`：cmd 展开为 `Windows_NT`，sh 原样回显），Linux 走 `/bin/sh`、Windows 走 PowerShell（`-EncodedCommand`，中文路径不丢字，并统一切 UTF-8 输出避免 GBK 乱码），用户不用换马或额外部署组件。实现复用同一条命令通道：路径与内容全程 base64 嵌入、不参与 shell 拼接，文件名也以 base64 回传，中文 / 空格 / 引号 / 换行都不会破坏解析；大文件按块追加到同目录临时 `.artex_up_*.b64` 再解码落盘（Linux 受 `MAX_ARG_STRLEN` 128KB 限制，Windows 受 cmd 8191 字符限制，块更小）。单次读取上限 2MB、上传上限 8MB，请求头触发型内存马另有约 6KB 载荷上限提示。
+- **配套马文件生成**：按该条记录的类型与参数名生成对应源码（php / jsp / asp / aspx，内存马生成配套 Filter 源码），页面可预览、复制、下载后上传到目标——客户端与马文件同源，不会出现「生成的马连不上」。参数名会拼进生成的源码，因此限制为字母数字与 `_ . -`。
+- **内存马连接**：`jsp_memory`（参数触发，POST 参数携带 base64 载荷）与 `jsp_memory_header`（请求头触发，参数名即头名，用 GET 且不带请求体，痕迹不落进 query/访问日志）。内存马没有马文件，URL 填任意被驻留 Filter 接管的路径即可；生成的 `ArtexFilter.java` 是协议配套的 Filter 本体，注册进目标进程（web.xml / Spring `FilterRegistrationBean` / 既有注入器）由使用者按框架决定。请求头触发型在封包阶段校验头名必须是 RFC 7230 token，带空格、冒号或换行的参数名直接拒绝。
+- **八种马形态，协议自定**：`php_eval / php_assert / php_cmd / jsp_runtime / asp_exec / aspx_exec / jsp_memory / jsp_memory_header`。回传内容用随机标记包裹后剥离，命令以 base64 经单个表单字段或请求头提交，避免用户输入落进代码字符串；**不兼容冰蝎、哥斯拉等加密流量框架**，接管那些马请仍用其官方客户端。
+
+#### 修复的问题
+
+- **PHP 马命令模式全部 500（历史 bug）**：`php_eval / php_assert` 的命令载荷与代码载荷生成时漏了字符串连接点（`echo 'B'$__o.'E'`），PHP 解析直接报 `syntax error, unexpected variable "$__o"`；此前只用内存马和模拟马做过验证，接真实 PHP 马做端到端联调时才暴露，现已改为 `echo 'B'.$__o.'E'`。
+- **手动输入路径后文件操作拼错目录**：文件面板里输入路径回车虽然能列出目标目录，但 `path` 状态没跟着更新，重命名 / 新建会落到上一个目录；现在列目录后无论服务端是否补全路径都同步状态。
 
 #### 安全边界
 
-- 新增的 9 个接口（列表 / 录入 / 编辑 / 删除 / 判活 / 执行 / 类型 / 马文件）全部挂在 `/api/` 下、经统一登录鉴权；命令执行的目标地址只取自 `webshells` 表记录，不接受调用方传入的任意 URL 转发，URL 亦限定 http/https。
+- 新增的 9 个接口（列表 / 录入 / 编辑 / 删除 / 判活 / 执行 / 类型 / 马文件 / 文件操作）全部挂在 `/api/` 下、经统一登录鉴权；命令执行的目标地址只取自 `webshells` 表记录，不接受调用方传入的任意 URL 转发，URL 亦限定 http/https。
+- 文件操作只接受白名单里的 7 种 op，路径与内容由服务端按目标系统规范化后以 base64 塞进脚本，不拼接进 shell 代码；拒绝删除 `/` 与任意盘符根目录（`C:\`），改权限只接受八进制数字。
 - 忽略证书校验按每条记录单独开关（默认开启以适配自签目标），不是全局放宽。
 
 #### 数据与迁移
@@ -28,6 +36,7 @@
 
 #### 变更的内容
 
+- **`install.sh` 可独立部署，方式二改成「Docker 起 Postgres + 运行预编译二进制」**：只要「一个 `artex` 二进制 + 一个 `install.sh`」就能起整套系统——目录里没有 `go.mod`/`docker-compose.yml` 时脚本直接进二进制模式（不再弹菜单），不依赖 Go / Node / git 仓库。二进制按 `./artex` → `./artex-*-<os>-<arch>[.exe]` → `dist/<os>-<arch>/artex` → `release/artex-*-<os>-<arch>` 顺序查找，也支持 `./install.sh <路径>` 显式指定；`release/` 是仓库内容不原地 chmod，需要可执行位时复制成 `./artex`。数据库交给 Docker：容器 `artex-pg`、只绑 `127.0.0.1:5432`、卷 `artex-pg`，已存在则复用（端口与密码从容器和已有 `config.json` 取回），端口被占可用 `ARTEX_PG_PORT` 换端口；就绪判定改用连续 3 次 `select 1`——新建卷 `initdb` 期间 `pg_isready` 会误报就绪，此时客户端会收到 `unexpected EOF`。支持 `ARTEX_ADDR` 换监听地址、`tls/{cert,key}.pem` 存在时自动 HTTPS、Windows 走 Git Bash。启动器沿用 `start.sh` 的退出码协议（0 停止 / 75 换装后重启 / 其它指数退避重启）并转发 SIGINT/SIGTERM，因此页面「一键更新」在这种部署下也能完成换装。
 - **方式一「全部 Docker」改为本地构建二开版镜像**：原先 `install.sh` 选 ① 会 `docker compose pull` 拉上游 `autumn27/artex`，而那个镜像里**没有 WebShell 功能**，装完页面是空的。现在 compose 默认镜像改成 `${ARTEX_IMAGE:-artex}:${ARTEX_TAG:-local}` 并声明 `build: Dockerfile.selfbuild`，`./install.sh` 选 ① 直接在容器里编译前端 + 后端产出 `artex:local`（宿主机不需要 Go/Node）；已有 `dist/<arch>/artex` 时自动走只装工具层的快路径。`update.sh` 的 ① 同步由 `docker compose pull artex` 改成 `docker compose build artex`。
 - **新增 `Dockerfile.selfbuild`**：node 静态导出 → go `-tags embedui` 内嵌编译 → python 运行时三段式，运行时层与 `Dockerfile` 一致。
 - **两个 Dockerfile 都不再写 `# syntax=docker/dockerfile:1`**：该指令让 BuildKit 去 `auth.docker.io` 取前端镜像，只配了 registry 镜像源、无法直连 Docker Hub 的主机会直接构建失败，而用到的指令内置前端全都支持。

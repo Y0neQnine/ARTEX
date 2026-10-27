@@ -22,8 +22,11 @@ type WebshellRecorder interface {
 type WebshellRecord struct {
 	Name      string
 	URL       string
-	ShellType string // php_eval | php_assert | php_cmd | jsp_runtime | asp_exec | aspx_exec
+	ShellType string // 原生 8 类，或 behinder3_* / behinder4_* / godzilla4_*
 	Param     string // 连接参数名（一句话马的口令字段），默认 pass
+	Secret    string // 加密马口令：冰蝎密码 / 哥斯拉 pass
+	SecretKey string // 哥斯拉密钥
+	Crypto    string // 冰蝎 4 加密方式
 	OSType    string // linux | windows | "" 自动
 	Note      string
 	TaskID    int64
@@ -56,6 +59,9 @@ type registerWebshellInput struct {
 	URL       string          `json:"url"`
 	ShellType string          `json:"shell_type"`
 	Param     string          `json:"param"`
+	Secret    string          `json:"secret"`
+	SecretKey string          `json:"secret_key"`
+	Crypto    string          `json:"crypto"`
 	OSType    string          `json:"os_type"`
 	Note      string          `json:"note"`
 	AssetID   json.RawMessage `json:"asset_id"`
@@ -67,11 +73,15 @@ type registerWebshellInput struct {
 func (t *ToolSet) registerWebshell() actool.CoreTool {
 	return writeTool("register_webshell",
 		"登记目标上已上传/写入的 WebShell（一句话马）。确认拿到 shell 后调用它，web 端「WebShell」页据此展示连接入口、判活并可下发命令——不登记则这条战果只在事实里，页面看不到。"+
-			"url 填可访问的马地址；shell_type 按马的实际形态选；param 是马收命令的参数名（默认 pass）；有对应资产/漏洞时带上 asset_id/finding_id 便于回溯。",
+			"url 填可访问的马地址；shell_type 按马的实际形态选（内存马选 jsp_memory / jsp_memory_header，url 填任意被驻留 Filter 接管的路径即可）；param 是马收命令的参数名（默认 pass），请求头触发型则是头名；有对应资产/漏洞时带上 asset_id/finding_id 便于回溯。"+
+			"自研加密马选 artex_crypt_php / artex_crypt_jsp / artex_crypt_aspx：param 填表单字段名（默认 d），secret 填连接口令（默认 artex），必须与生成马时一致。",
 		obj(map[string]any{
-			"url":        str("马的完整 URL，如 http://target.com/upload/shell.php"),
-			"shell_type": str("马类型：php_eval|php_assert|php_cmd|jsp_runtime|asp_exec|aspx_exec"),
-			"param":      str("连接参数名（马收命令的字段），默认 pass；php_cmd 默认 cmd"),
+			"url":        str("马的完整 URL，如 http://target.com/upload/shell.php；内存马填驻留 Filter 接管的任意路径"),
+			"shell_type": str("马类型：php_eval|php_assert|php_cmd|jsp_runtime|asp_exec|aspx_exec|jsp_memory|jsp_memory_header|behinder3_php|behinder3_jsp|behinder3_aspx|behinder4_php|behinder4_jsp|behinder4_aspx|godzilla4_php|godzilla4_jsp|godzilla4_aspx|artex_crypt_php|artex_crypt_jsp|artex_crypt_aspx"),
+			"param":      str("连接参数名（马收命令的字段/头名），默认 pass；php_cmd 默认 cmd；自研加密马默认 d；冰蝎/哥斯拉不需要"),
+			"secret":     str("加密马口令：冰蝎连接密码、哥斯拉 pass 字段名，或自研加密马的连接口令；原生马留空"),
+			"secret_key": str("哥斯拉密钥；冰蝎、自研加密马与原生马留空"),
+			"crypto":     str("冰蝎 4 加密方式：default_aes|aes_with_magic|default_xor|default_xor_base64；默认 default_aes"),
 			"os_type":    str("目标系统：linux|windows，留空表示由马自身探测"),
 			"name":       str("可读名称，如「前台上传点 getshell」"),
 			"note":       str("备注：上传路径、口令来源、限制条件等"),
@@ -88,9 +98,10 @@ func (t *ToolSet) registerWebshell() actool.CoreTool {
 				return actool.Errorf("register_webshell 不可用：宿主未注入 WebShell 存储，改为用 record_fact 记录 shell 信息。"), nil
 			}
 			rec := WebshellRecord{
-				Name: a.Name, URL: a.URL, ShellType: a.ShellType, Param: a.Param, OSType: a.OSType,
-				Note: a.Note, TaskID: t.taskID, AssetID: pid(a.AssetID), FindingID: pid(a.FindingID),
-				Worker: t.worker,
+				Name: a.Name, URL: a.URL, ShellType: a.ShellType, Param: a.Param,
+				Secret: a.Secret, SecretKey: a.SecretKey, Crypto: a.Crypto,
+				OSType: a.OSType, Note: a.Note, TaskID: t.taskID, AssetID: pid(a.AssetID),
+				FindingID: pid(a.FindingID), Worker: t.worker,
 			}
 			id, err := t.webshellRecorder.RegisterWebshell(ctx, rec)
 			if err != nil {

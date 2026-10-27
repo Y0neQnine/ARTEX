@@ -24,10 +24,27 @@ func fakeShell(t *testing.T, shellType, param string, r *http.Request) string {
 	case TypePHPCmd:
 		// 裸输出型：没有标记，system() 把命令输出直接打出来。
 		return "echo[" + form.Get(param) + "]"
-	case TypeJSP, TypeASPX:
+	case TypeJSP, TypeASPX, TypeJSPMemory:
 		raw, err := base64.StdEncoding.DecodeString(form.Get(param))
 		if err != nil {
 			t.Fatalf("decode %s param: %v", shellType, err)
+		}
+		parts := strings.SplitN(string(raw), "\n", 3)
+		if len(parts) != 3 {
+			t.Fatalf("%s payload wants 3 newline-separated parts, got %d", shellType, len(parts))
+		}
+		return parts[0] + "echo[" + parts[2] + "]" + parts[1]
+	case TypeJSPMemoryHeader:
+		// 触发端在请求头里，请求体应为空。
+		if r.Method != "GET" {
+			t.Fatalf("header-triggered memory shell should be driven by GET, got %s", r.Method)
+		}
+		if got := r.ContentLength; got != 0 {
+			t.Fatalf("header-triggered request must carry no body, ContentLength=%d", got)
+		}
+		raw, err := base64.StdEncoding.DecodeString(r.Header.Get(param))
+		if err != nil {
+			t.Fatalf("decode %s header: %v", shellType, err)
 		}
 		parts := strings.SplitN(string(raw), "\n", 3)
 		if len(parts) != 3 {
@@ -62,19 +79,22 @@ func phpEchoMarkers(code string) (begin, end string) {
 
 func TestBuildAndParseRoundTrip(t *testing.T) {
 	cases := []struct {
-		shellType string
-		param     string
-		mode      string
-		input     string
-		wantRaw   bool
+		shellType  string
+		param      string
+		mode       string
+		input      string
+		wantRaw    bool
+		wantMethod string // "" = POST + 表单体
 	}{
-		{TypePHPEval, "pass", ModeCommand, "id", false},
-		{TypePHPEval, "pass", ModeCode, "phpinfo();", false},
-		{TypePHPAssert, "x", ModeCommand, "uname -a", false},
-		{TypePHPCmd, "cmd", ModeCommand, "whoami", true},
-		{TypeJSP, "pass", ModeCommand, "ls -la", false},
-		{TypeASP, "pass", ModeCommand, "dir", false},
-		{TypeASPX, "pass", ModeCommand, "dir", false},
+		{TypePHPEval, "pass", ModeCommand, "id", false, ""},
+		{TypePHPEval, "pass", ModeCode, "phpinfo();", false, ""},
+		{TypePHPAssert, "x", ModeCommand, "uname -a", false, ""},
+		{TypePHPCmd, "cmd", ModeCommand, "whoami", true, ""},
+		{TypeJSP, "pass", ModeCommand, "ls -la", false, ""},
+		{TypeASP, "pass", ModeCommand, "dir", false, ""},
+		{TypeASPX, "pass", ModeCommand, "dir", false, ""},
+		{TypeJSPMemory, "pass", ModeCommand, "ls -la", false, ""},
+		{TypeJSPMemoryHeader, "X-Token", ModeCommand, "ls -la", false, "GET"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.shellType+"/"+tc.mode, func(t *testing.T) {
@@ -91,8 +111,18 @@ func TestBuildAndParseRoundTrip(t *testing.T) {
 			if p.Raw != tc.wantRaw {
 				t.Fatalf("%s: Raw=%v want %v", tc.shellType, p.Raw, tc.wantRaw)
 			}
-			if p.Method != "POST" || p.ContentType != "application/x-www-form-urlencoded" {
+			wantMethod := tc.wantMethod
+			if wantMethod == "" {
+				wantMethod = "POST"
+			}
+			if p.Method != wantMethod {
+				t.Fatalf("%s: method=%s want %s", tc.shellType, p.Method, wantMethod)
+			}
+			if wantMethod == "POST" && p.ContentType != "application/x-www-form-urlencoded" {
 				t.Fatalf("unexpected request shape: %+v", p)
+			}
+			if wantMethod == "GET" && (p.ContentType != "" || p.Header != tc.param) {
+				t.Fatalf("header-triggered plan should carry no form body: %+v", p)
 			}
 			out, err := Run(context.Background(), target, p, DefaultTimeout)
 			if err != nil {
@@ -146,10 +176,22 @@ func TestParseHandlesMarkerInsideOtherOutput(t *testing.T) {
 }
 
 func TestCodeModeOnlyForPHP(t *testing.T) {
-	for _, typ := range []string{TypeJSP, TypeASP, TypeASPX, TypePHPCmd} {
+	for _, typ := range []string{TypeJSP, TypeASP, TypeASPX, TypePHPCmd, TypeJSPMemory, TypeJSPMemoryHeader} {
 		if _, err := Build(&Target{Type: typ}, ModeCode, "x"); err != ErrModeNotSupported {
 			t.Fatalf("%s: want ErrModeNotSupported, got %v", typ, err)
 		}
+	}
+}
+
+func TestHeaderTriggerRejectsNonTokenHeaderName(t *testing.T) {
+	// 头名来自用户填的参数名，带空格/换行会破坏请求行，必须挡在封包阶段。
+	for _, bad := range []string{"X Token", "X\nToken", "X:Token"} {
+		if _, err := Build(&Target{Type: TypeJSPMemoryHeader, Param: bad}, ModeCommand, "id"); err != ErrBadHeaderName {
+			t.Fatalf("header name %q: want ErrBadHeaderName, got %v", bad, err)
+		}
+	}
+	if _, err := Build(&Target{Type: TypeJSPMemoryHeader, Param: "X-Api_Key1"}, ModeCommand, "id"); err != nil {
+		t.Fatalf("valid header name rejected: %v", err)
 	}
 }
 
@@ -193,11 +235,14 @@ func TestRunRespectsContextCancel(t *testing.T) {
 }
 
 func TestCheckAgainstFakeShell(t *testing.T) {
-	for _, typ := range []string{TypePHPEval, TypePHPAssert, TypePHPCmd, TypeJSP, TypeASP, TypeASPX} {
+	for _, typ := range []string{TypePHPEval, TypePHPAssert, TypePHPCmd, TypeJSP, TypeASP, TypeASPX, TypeJSPMemory, TypeJSPMemoryHeader} {
 		t.Run(typ, func(t *testing.T) {
 			param := "pass"
-			if typ == TypePHPCmd {
+			switch typ {
+			case TypePHPCmd:
 				param = "cmd"
+			case TypeJSPMemoryHeader:
+				param = "X-Token"
 			}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Write([]byte(fakeShell(t, typ, param, r))) //nolint:errcheck
@@ -253,7 +298,19 @@ func TestCheckReportsTransportError(t *testing.T) {
 func TestPayloadEmbedsParam(t *testing.T) {
 	for _, d := range Types() {
 		t.Run(d.Type, func(t *testing.T) {
-			name, code, err := Payload(&Target{Type: d.Type, Param: "zizz"})
+			target := &Target{Type: d.Type, Param: "zizz"}
+			want := "zizz"
+			if d.ParamUnused {
+				// 第三方马没有参数名，口令走 secret / secret_key；冰蝎马只嵌派生密钥。
+				target.Secret = "zizz"
+				target.SecretKey = "kek"
+				if d.Family == FamilyGodzilla4 {
+					want = key16("kek")
+				} else {
+					want = key16("zizz")
+				}
+			}
+			name, code, err := Payload(target)
 			if err != nil {
 				t.Fatalf("Payload(%s): %v", d.Type, err)
 			}
@@ -263,8 +320,11 @@ func TestPayloadEmbedsParam(t *testing.T) {
 			if strings.Contains(name, "__PARAM__") || strings.Contains(code, "__PARAM__") {
 				t.Fatalf("%s payload left the param placeholder unsubstituted", d.Type)
 			}
-			if !strings.Contains(code, "zizz") {
-				t.Fatalf("%s payload does not carry the configured param: %s", d.Type, code)
+			if !strings.Contains(code, want) {
+				t.Fatalf("%s payload does not carry the configured secret %q", d.Type, want)
+			}
+			if d.ParamUnused && d.Family == FamilyGodzilla4 && !strings.Contains(code, "zizz") {
+				t.Fatalf("%s payload does not carry the configured pass", d.Type)
 			}
 		})
 	}
@@ -282,6 +342,9 @@ func TestParamFallsBackToTypeDefault(t *testing.T) {
 	}
 	if got := (&Target{Type: TypePHPCmd, Param: "  "}).param(); got != "cmd" {
 		t.Fatalf("php_cmd default param: got %q want cmd", got)
+	}
+	if got := (&Target{Type: TypeJSPMemoryHeader}).param(); !validHeaderName(got) {
+		t.Fatalf("header-triggered default param must be a usable header name, got %q", got)
 	}
 	// 自定义参数名要真的进到请求体里
 	p, err := Build(&Target{Type: TypePHPCmd, Param: "kk"}, ModeCommand, "id")

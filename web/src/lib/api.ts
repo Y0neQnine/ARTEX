@@ -105,6 +105,8 @@ import type {
   Webshell,
   WebshellCheckResult,
   WebshellExecResult,
+  WebshellFSRequest,
+  WebshellFSResult,
   WebshellInputPayload,
   WebshellPayload,
   WebshellType,
@@ -1308,12 +1310,24 @@ export const api = {
   checkWebshell: (id: number) => post<WebshellCheckResult>(`/webshells/${id}/check`),
   execWebshell: (id: number, command: string, mode?: string) =>
     post<WebshellExecResult>(`/webshells/${id}/exec`, mode ? { command, mode } : { command }),
+  // 文件管理：一次一个 op，路径与内容都经服务端 base64 编码后下发。
+  webshellFS: (id: number, body: WebshellFSRequest) => post<WebshellFSResult>(`/webshells/${id}/fs`, body),
   // 马文件：带 id 按已落库的配置生成，不带 id 用 type/param 预览（录入时先看一眼）。
-  webshellPayload: (params?: { id?: number; type?: string; param?: string }) => {
+  webshellPayload: (params?: {
+    id?: number;
+    type?: string;
+    param?: string;
+    crypto?: string;
+    secret?: string;
+    secretKey?: string;
+  }) => {
     if (params?.id) return get<WebshellPayload>(`/webshells/${params.id}/payload`);
     const sp = new URLSearchParams();
     if (params?.type) sp.set("type", params.type);
     if (params?.param) sp.set("param", params.param);
+    if (params?.crypto) sp.set("crypto", params.crypto);
+    if (params?.secret) sp.set("secret", params.secret);
+    if (params?.secretKey) sp.set("secret_key", params.secretKey);
     return get<WebshellPayload>(`/webshells/payload?${sp}`);
   },
 

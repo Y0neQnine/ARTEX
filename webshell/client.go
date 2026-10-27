@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"strings"
 	"time"
@@ -68,11 +69,22 @@ func Run(ctx context.Context, t *Target, p *Plan, timeout time.Duration) (*Outco
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, p.Method, u.String(), strings.NewReader(p.Body))
+	// Header 触发型把载荷放在请求头里，不带请求体；Content-Type 也要跟着留空，
+	// 否则会给目标发一个声明了表单编码却没有体的 GET。
+	var reqBody io.Reader
+	if p.Header == "" {
+		reqBody = strings.NewReader(p.Body)
+	}
+	req, err := http.NewRequestWithContext(reqCtx, p.Method, u.String(), reqBody)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", p.ContentType)
+	if p.ContentType != "" {
+		req.Header.Set("Content-Type", p.ContentType)
+	}
+	if p.Header != "" {
+		req.Header.Set(p.Header, p.Body)
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
 	start := time.Now()
@@ -110,18 +122,23 @@ const ProbeCommand = "echo artex_probe_ok"
 // WindowsProbe 用于已知 Windows 目标（cmd.exe 的 echo 语法）。
 const WindowsProbe = "echo artex_probe_ok"
 
-// Check 执行一次判活探测，返回 (是否可连接, 输出或错误)。
-func Check(ctx context.Context, t *Target, timeout time.Duration) (bool, string, error) {
-	p, err := Build(t, ModeCommand, ProbeCommand)
-	if err != nil {
-		return false, "", err
+// NewHTTPClient builds the HTTP client used by third-party protocols. jar=true keeps
+// cookies so 哥斯拉 can cache its payload in the server session.
+func NewHTTPClient(insecure, jar bool) *http.Client {
+	c := &http.Client{
+		Transport: &http.Transport{
+			Proxy:       http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: insecure, // #nosec G402 — 由该行记录的 insecure_tls 显式控制
+				MinVersion:         tls.VersionTLS10,
+			},
+		},
 	}
-	out, err := Run(ctx, t, p, timeout)
-	if err != nil {
-		return false, "", err
+	if jar {
+		if j, err := cookiejar.New(nil); err == nil {
+			c.Jar = j
+		}
 	}
-	if !out.Parsed {
-		return false, fmt.Sprintf("HTTP %d，响应中缺少标记，可能不是本工具生成的马或被拦截", out.Status), nil
-	}
-	return true, out.Output, nil
+	return c
 }

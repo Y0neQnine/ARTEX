@@ -18,6 +18,9 @@ type DBWebshell struct {
 	URL             string
 	ShellType       string
 	Param           string
+	Crypto          string
+	Secret          string
+	SecretKey       string
 	OSType          string
 	ExecMode        string
 	InsecureTLS     bool
@@ -70,6 +73,9 @@ type WebshellInput struct {
 	URL         string
 	ShellType   string
 	Param       string
+	Crypto      string
+	Secret      string
+	SecretKey   string
 	OSType      string
 	ExecMode    string
 	InsecureTLS *bool
@@ -79,9 +85,9 @@ type WebshellInput struct {
 }
 
 const webshellSelectCols = `w.id, w.name, w.task_id, w.asset_id, w.finding_id, w.url, w.shell_type,
-	       w.param, w.os_type, w.exec_mode, w.insecure_tls, w.status, w.last_check_at,
-	       w.last_error, w.source, w.worker, w.note, w.created_at, w.updated_at,
-	       COALESCE(t.name, '') AS task_name, COALESCE(t.description, '') AS task_description`
+	       w.param, w.crypto, w.secret, w.secret_key, w.os_type, w.exec_mode, w.insecure_tls,
+	       w.status, w.last_check_at, w.last_error, w.source, w.worker, w.note, w.created_at,
+	       w.updated_at, COALESCE(t.name, '') AS task_name, COALESCE(t.description, '') AS task_description`
 
 func scanWebshells(rows interface {
 	Next() bool
@@ -92,9 +98,9 @@ func scanWebshells(rows interface {
 	for rows.Next() {
 		w := &DBWebshell{}
 		if err := rows.Scan(&w.ID, &w.Name, &w.TaskID, &w.AssetID, &w.FindingID, &w.URL,
-			&w.ShellType, &w.Param, &w.OSType, &w.ExecMode, &w.InsecureTLS, &w.Status,
-			&w.LastCheckAt, &w.LastError, &w.Source, &w.Worker, &w.Note, &w.CreatedAt,
-			&w.UpdatedAt, &w.TaskName, &w.TaskDescription); err != nil {
+			&w.ShellType, &w.Param, &w.Crypto, &w.Secret, &w.SecretKey, &w.OSType, &w.ExecMode,
+			&w.InsecureTLS, &w.Status, &w.LastCheckAt, &w.LastError, &w.Source, &w.Worker,
+			&w.Note, &w.CreatedAt, &w.UpdatedAt, &w.TaskName, &w.TaskDescription); err != nil {
 			return nil, err
 		}
 		out = append(out, w)
@@ -114,11 +120,11 @@ func (d *DB) CreateWebshell(in WebshellInput) (*DBWebshell, error) {
 	var id int64
 	err := d.QueryRow(
 		`INSERT INTO webshells (name, task_id, asset_id, finding_id, url, shell_type, param,
-		                       os_type, exec_mode, insecure_tls, source, worker, note)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+		                       crypto, secret, secret_key, os_type, exec_mode, insecure_tls, source, worker, note)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
 		in.Name, nullableID(in.TaskID), nullableID(in.AssetID), nullableID(in.FindingID),
-		strings.TrimSpace(in.URL), in.ShellType, in.Param, in.OSType, in.ExecMode,
-		in.InsecureTLS == nil || *in.InsecureTLS, src, in.Worker, in.Note,
+		strings.TrimSpace(in.URL), in.ShellType, in.Param, in.Crypto, in.Secret, in.SecretKey,
+		in.OSType, in.ExecMode, in.InsecureTLS == nil || *in.InsecureTLS, src, in.Worker, in.Note,
 	).Scan(&id)
 	if err != nil {
 		return nil, err
@@ -162,15 +168,15 @@ func (d *DB) ListWebshells(taskID int64, status, q string, limit, offset int) ([
 	var args []any
 	if taskID > 0 {
 		args = append(args, taskID)
-		where = append(where, "w.task_id = $"+pos(len(args)))
+		where = append(where, "w.task_id = "+pos(len(args)))
 	}
 	if status != "" {
 		args = append(args, status)
-		where = append(where, "w.status = $"+pos(len(args)))
+		where = append(where, "w.status = "+pos(len(args)))
 	}
 	if qq := strings.TrimSpace(q); qq != "" {
 		args = append(args, "%"+strings.ToLower(qq)+"%")
-		where = append(where, `(lower(w.name) LIKE $`+pos(len(args))+` OR lower(w.url) LIKE $`+pos(len(args))+` OR lower(w.note) LIKE $`+pos(len(args))+`)`)
+		where = append(where, `(lower(w.name) LIKE `+pos(len(args))+` OR lower(w.url) LIKE `+pos(len(args))+` OR lower(w.note) LIKE `+pos(len(args))+`)`)
 	}
 	clause := ""
 	if len(where) > 0 {
@@ -187,7 +193,7 @@ func (d *DB) ListWebshells(taskID int64, status, q string, limit, offset int) ([
 	rows, err := d.Query(
 		`SELECT `+webshellSelectCols+` FROM webshells w
 		 LEFT JOIN tasks t ON t.id = w.task_id`+clause+
-			` ORDER BY w.id DESC LIMIT $`+pos(len(args)-1)+` OFFSET $`+pos(len(args)), args...)
+			` ORDER BY w.id DESC LIMIT `+pos(len(args)-1)+` OFFSET `+pos(len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -201,11 +207,12 @@ func (d *DB) ListWebshells(taskID int64, status, q string, limit, offset int) ([
 func (d *DB) UpdateWebshell(id int64, in WebshellInput) (*DBWebshell, error) {
 	res, err := d.Exec(
 		`UPDATE webshells SET name=$1, task_id=$2, asset_id=$3, finding_id=$4, url=$5,
-		        shell_type=$6, param=$7, os_type=$8, exec_mode=$9, insecure_tls=$10, note=$11
-		 WHERE id=$12`,
+		        shell_type=$6, param=$7, crypto=$8, secret=$9, secret_key=$10,
+		        os_type=$11, exec_mode=$12, insecure_tls=$13, note=$14
+		 WHERE id=$15`,
 		in.Name, nullableID(in.TaskID), nullableID(in.AssetID), nullableID(in.FindingID),
-		strings.TrimSpace(in.URL), in.ShellType, in.Param, in.OSType, in.ExecMode,
-		in.InsecureTLS == nil || *in.InsecureTLS, in.Note, id)
+		strings.TrimSpace(in.URL), in.ShellType, in.Param, in.Crypto, in.Secret, in.SecretKey,
+		in.OSType, in.ExecMode, in.InsecureTLS == nil || *in.InsecureTLS, in.Note, id)
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +231,12 @@ func (d *DB) SetWebshellStatus(id int64, status, errMsg string) error {
 	_, err := d.Exec(
 		`UPDATE webshells SET status=$1, last_error=$2, last_check_at=now() WHERE id=$3`,
 		status, errMsg, id)
+	return err
+}
+
+// SetWebshellOS 回写探测到的目标系统，避免每次文件操作都再探一次。
+func (d *DB) SetWebshellOS(id int64, os string) error {
+	_, err := d.Exec(`UPDATE webshells SET os_type=$1 WHERE id=$2`, os, id)
 	return err
 }
 

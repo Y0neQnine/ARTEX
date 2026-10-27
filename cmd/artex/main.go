@@ -55,8 +55,15 @@ func run() int {
 		addr    = flag.String("addr", ":8787", "HTTP listen address")
 		dataDir = flag.String("data", filepath.Join(config.BaseDir(), "data"), "data directory for SQLite stores (default: data/ next to the executable)")
 		proxy   = flag.String("proxy", "127.0.0.1:8788", "traffic recording proxy address (empty to disable)")
+		tlsCert = flag.String("tls-cert", "", "PEM certificate for HTTPS (requires -tls-key)")
+		tlsKey  = flag.String("tls-key", "", "PEM private key for HTTPS (requires -tls-cert)")
 	)
 	flag.Parse()
+
+	useTLS := *tlsCert != "" || *tlsKey != ""
+	if useTLS && (*tlsCert == "" || *tlsKey == "") {
+		log.Fatal("-tls-cert 与 -tls-key 必须同时提供")
+	}
 
 	// hand the build version to the server package so GET /api/health can report it
 	// to the frontend top bar.
@@ -120,8 +127,18 @@ func run() int {
 	}
 
 	go func() {
-		log.Printf("ARTEX %s backend listening on %s (data=%s, workers=%d)", version, *addr, *dataDir, mgr.Workers())
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		scheme := "http"
+		if useTLS {
+			scheme = "https"
+		}
+		log.Printf("ARTEX %s backend listening on %s://%s (data=%s, workers=%d)", version, scheme, *addr, *dataDir, mgr.Workers())
+		var err error
+		if useTLS {
+			err = httpSrv.ListenAndServeTLS(*tlsCert, *tlsKey)
+		} else {
+			err = httpSrv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			log.Fatalf("serve: %v", err)
 		}
 	}()

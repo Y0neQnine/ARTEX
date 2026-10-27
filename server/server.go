@@ -754,6 +754,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/webshells/{id}", s.deleteWebshell)
 	mux.HandleFunc("POST /api/webshells/{id}/check", s.checkWebshell)
 	mux.HandleFunc("POST /api/webshells/{id}/exec", s.execWebshell)
+	mux.HandleFunc("POST /api/webshells/{id}/fs", s.fsWebshell)
 	mux.HandleFunc("GET /api/webshells/{id}/payload", s.webshellPayload)
 
 	// company system

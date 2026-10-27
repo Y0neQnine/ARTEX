@@ -1625,6 +1625,9 @@ export interface Webshell {
   shell_type: string;
   shell_label: string;
   param: string;
+  crypto?: string; // 第三方协议加密方式（冰蝎/哥斯拉），原生马为空
+  secret?: string; // 冰蝎连接密码 / 哥斯拉 pass
+  secret_key?: string; // 哥斯拉密钥
   os_type: string; // "" | linux | windows
   exec_mode: string; // command | code
   insecure_tls: boolean;
@@ -1646,6 +1649,13 @@ export interface WebshellType {
   default_param: string;
   code_mode: boolean;
   note: string;
+  family?: string; // native | behinder3 | behinder4 | godzilla4
+  language?: string; // php | jsp | aspx
+  param_unused?: boolean; // 第三方协议不需要参数名
+  cryptos?: string[] | null;
+  default_crypto?: string;
+  default_secret?: string;
+  default_secret_key?: string;
 }
 
 export interface WebshellExecResult {
@@ -1671,12 +1681,53 @@ export interface WebshellPayload {
   shell_type: string;
 }
 
+// 文件管理（/api/webshells/{id}/fs）：列目录 / 读 / 写 / 建目录 / 删 / 改名 / 改权限。
+export interface WebshellFSEntry {
+  name: string;
+  dir: boolean;
+  link?: string;
+  size: number;
+  mode?: string; // Linux 八进制权限；Windows 为空
+  mtime: number; // Unix 秒
+}
+
+export interface WebshellFSData {
+  path?: string;
+  parent?: string;
+  entries?: WebshellFSEntry[];
+  content_b64?: string;
+  size?: number;
+  bytes?: number;
+}
+
+export interface WebshellFSResult {
+  ok: boolean;
+  os?: string; // 探测/记录到的目标系统
+  error?: string;
+  elapsed_ms?: number;
+  data?: WebshellFSData;
+}
+
+export interface WebshellFSRequest {
+  op: "list" | "read" | "write" | "mkdir" | "delete" | "rename" | "chmod";
+  path?: string;
+  from?: string;
+  to?: string;
+  content_b64?: string;
+  mode?: string;
+  recursive?: boolean;
+  os?: string;
+}
+
 // 录入/编辑的入参；全部可选，PATCH 只改出现的键。
 export interface WebshellInputPayload {
   name?: string;
   url?: string;
   shell_type?: string;
   param?: string;
+  crypto?: string;
+  secret?: string;
+  secret_key?: string;
   os_type?: string;
   exec_mode?: string;
   insecure_tls?: boolean;

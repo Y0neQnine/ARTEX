@@ -1399,9 +1399,17 @@ CREATE TABLE IF NOT EXISTS webshells (
     finding_id  BIGINT REFERENCES findings(id) ON DELETE SET NULL,
     url         TEXT NOT NULL,
     -- php_eval / php_assert / php_cmd / jsp_runtime / asp_exec / aspx_exec
+    -- jsp_memory / jsp_memory_header（JVM 内存马，按参数或请求头触发）
+    -- behinder3_* / behinder4_* / godzilla4_*（第三方加密协议，需 secret/secret_key）
     shell_type  TEXT NOT NULL DEFAULT 'php_eval',
-    -- 连接参数名（一句话马收命令的字段名），默认 pass
+    -- 连接参数名（一句话马收命令的字段名），默认 pass；加密马走自定义头，此列不用
     param       TEXT NOT NULL DEFAULT 'pass',
+    -- 加密马参数：冰蝎密码 / 哥斯拉 pass 存放在 secret；
+    -- 冰蝎 4 加密方式（default_aes / aes_with_magic / default_xor / default_xor_base64）
+    -- 与哥斯拉密钥 secret_key 分列存放。
+    crypto      TEXT NOT NULL DEFAULT '',
+    secret      TEXT NOT NULL DEFAULT '',
+    secret_key  TEXT NOT NULL DEFAULT '',
     -- 目标系统：linux / windows / ''(auto，由马自身探测)
     os_type     TEXT NOT NULL DEFAULT '',
     -- 命令执行方式：command 执行系统命令 | code 执行代码（仅 php_* 支持）
@@ -1420,6 +1428,9 @@ CREATE TABLE IF NOT EXISTS webshells (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE webshells ADD COLUMN IF NOT EXISTS exec_mode TEXT NOT NULL DEFAULT 'command';
+ALTER TABLE webshells ADD COLUMN IF NOT EXISTS crypto TEXT NOT NULL DEFAULT '';
+ALTER TABLE webshells ADD COLUMN IF NOT EXISTS secret TEXT NOT NULL DEFAULT '';
+ALTER TABLE webshells ADD COLUMN IF NOT EXISTS secret_key TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_webshells_task ON webshells(task_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_webshells_time ON webshells(id DESC);
 CREATE INDEX IF NOT EXISTS idx_webshells_status ON webshells(status, id DESC);

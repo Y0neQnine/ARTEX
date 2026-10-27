@@ -68,10 +68,13 @@ AI 自主渗透测试系统（Go 后端 + Next.js 前端）
 
 - agent 确认 getshell 后调用 `register_webshell` 登记（url / 类型 / 参数名 / 系统），「**WebShell**」页即刻出现这条连接；也可在页面手动录入已有的马；
 - **判活**：向目标发一条无害的 `echo` 探测，按结果标记存活 / 已掉，失败原因回显在列表上；
-- **终端**：点开任意一条即打开命令面板，一次发一条命令并贴回输出；PHP eval / assert 型还支持代码模式，直接执行 PHP 代码；
+- **终端**：点开任意一条即打开命令面板，一次发一条命令并贴回输出，↑/↓ 翻历史、可一键清屏；PHP eval / assert 型还支持代码模式，直接执行 PHP 代码；
+- **文件管理**：右侧面板切到「文件」即是蚁剑式的文件管理器——列目录、进出目录、看/改文本文件、上传下载、新建文件 / 目录、重命名、改权限（Linux）、删除。目标系统首次操作时自动探测并回写记录（`echo %OS%`：cmd 展开为 `Windows_NT`），Linux 走 `/bin/sh`、Windows 走 PowerShell，用户不需要换马或额外部署组件；
 - **马文件**：按该条记录的类型与参数名生成配套源码，可在页面预览、复制、下载后上传到目标——客户端与马文件协议同源，不会出现「生成的马连不上」。
 
-支持 `php_eval / php_assert / php_cmd / jsp_runtime / asp_exec / aspx_exec` 六种形态。回传用随机标记包裹后剥离，命令经 base64 传输、由单个表单字段提交，**这是本系统自定的协议，不兼容冰蝎、哥斯拉等加密流量框架**；要接管那些马请只用它们的客户端。所有接口都在登录鉴权之后，目标地址取自本表记录，不接受任意 URL 转发。
+支持 `php_eval / php_assert / php_cmd / jsp_runtime / asp_exec / aspx_exec` 六种文件马，外加 `jsp_memory / jsp_memory_header` 两种 JVM 内存马（按 POST 参数或自定义请求头触发；内存马没有马文件，URL 填任意被驻留 Filter 接管的路径即可，页面给出协议配套的 Filter 源码）。回传用随机标记包裹后剥离，命令经 base64 传输、由单个表单字段或请求头提交，**这是本系统自定的协议，不兼容冰蝎、哥斯拉等加密流量框架**；要接管那些马请只用它们的客户端。所有接口都在登录鉴权之后，目标地址取自本表记录，不接受任意 URL 转发。
+
+文件面板复用同一条命令通道：每次操作生成一段 `sh` / PowerShell 脚本，路径与内容都以 base64 嵌入，不参与 shell 拼接；大文件写入按块追加到同目录临时 `.artex_up_*.b64` 再解码落盘（Linux 单条命令受 `MAX_ARG_STRLEN` 128KB 限制，Windows 受 cmd 8191 字符限制，所以 Windows 块更小）。单次读取上限 2MB、上传上限 8MB；请求头触发的内存马整段脚本要塞进一个请求头，超过约 6KB 的操作会直接提示改用参数触发型或命令型马。
 
 ---
 
@@ -87,12 +90,12 @@ cd ARTEX
 ./install.sh
 ```
 
-脚本会：检测 / 自动安装 Docker → 让你选 **① 全部 Docker** 或 **② 本地编译运行**：
+脚本会：检测 / 自动安装 Docker → 让你选 **① 全部 Docker** 或 **② Docker 起 Postgres + 运行预编译二进制**：
 
 - **① 全部 Docker**：填一个 Postgres 密码（可回车随机）→ 自动写 `.env` → **本地构建二开版镜像**（`Dockerfile.selfbuild`，容器里编译前端 + 后端，宿主机不需要 Go/Node；已有 `dist/<arch>/artex` 时自动走只装工具层的快路径）→ `docker compose up -d`。**不再拉上游 `autumn27/artex`，那个镜像里没有 WebShell 功能。**
-- **② 本地运行**：选数据库（连已有 / 用 Docker 起一个）→ 生成 `config.json` → `go` 编译内嵌单二进制 → 启动。
+- **② Docker 起 Postgres + 运行预编译二进制**：不再编译。脚本从 `./artex`、`dist/<os>-<arch>/artex`、`release/artex-*-<os>-<arch>` 里挑当前平台的二进制 → 用 Docker 起 `artex-pg`（只绑 `127.0.0.1:5432`，卷 `artex-pg`，已有容器则复用；端口冲突时用 `ARTEX_PG_PORT=15432 ./install.sh` 换端口）→ 等 `pg_isready` 通过 → 写 `config.json`（0600）→ 前台启动。存在 `tls/cert.pem` + `tls/key.pem` 时自动以 HTTPS 启动。宿主机只需要 Docker，不需要 Go/Node。
 
-装好后打开 **http://localhost:8787**（首次进入 `/setup` 设置管理员密码）。
+装好后打开 **http://localhost:8787**（方式二在 `tls/` 下有证书时改为 `https://localhost:8787`；首次进入 `/setup` 设置管理员密码）。
 
 ### 方式二：Docker Compose（手动）
 
@@ -111,17 +114,25 @@ docker compose up -d --build  # 本地构建 artex:local + postgres
 `/message?sessionId=...` 接收 JSON-RPC 请求；配置时将 URL 填为 `/sse`，请求头按
 `Authorization=Bearer <token>` 填写。
 
-### 方式三：下载预编译二进制（Releases）
+### 方式三：二进制 + install.sh（免编译、免仓库）
 
-到 [Releases](https://github.com/Autumn-27/ARTEX/releases) 下载对应平台的 zip，解压后得到 `artex` + `start.sh`（Windows 为 `start.bat`）+ `skills/` + `config.example.json`：
+从 [release/](https://github.com/Y0neQnine/ARTEX/tree/main/release) 下载对应平台的文件，和仓库根目录的 `install.sh` 放进同一个目录：
 
 ```bash
-cp config.example.json config.json   # 填好 database 连接
-./start.sh                           # → http://localhost:8787
+chmod +x install.sh
+./install.sh                              # 自动找同目录的 artex / artex-*-linux-amd64
+./install.sh ./artex-0.3.15-linux-amd64   # 也可以显式指定
 ```
 
-> 请用 `start.sh` / `start.bat` 启动，而不是直接跑 `./artex`。它是个守护脚本：程序退出后按退出码决定是否重新拉起，**页面上的[一键更新](#方式一页面一键更新推荐)靠它完成换装**。直接运行 `./artex` 时更新完就不会被拉起了。
-> 后台常驻：`nohup ./start.sh >artex.log 2>&1 &`。
+脚本依次做：挑二进制 → Docker 起 Postgres（容器 `artex-pg`，只绑 `127.0.0.1:5432`，卷 `artex-pg`，已存在则复用）→ 等数据库真正可查询 → 写 `config.json`（0600）→ 启动。宿主机只需要 Docker，**不需要 Go / Node，也不需要 git 仓库**。
+
+- 端口冲突：`ARTEX_PG_PORT=15432 ./install.sh`；换监听地址：`ARTEX_ADDR=127.0.0.1:9000 ./install.sh`。
+- `tls/` 下同时放 `cert.pem` 与 `key.pem` 时自动以 HTTPS 启动。
+- 退出码约定与 `start.sh` 相同（0 停止 / 75 换装后重启 / 其它指数退避重启），所以页面「一键更新」在这种启动方式下同样能完成换装，不需要额外装守护脚本。
+- 后台常驻：`setsid nohup ./install.sh > artex.log 2>&1 &`。
+- Windows 用 Git Bash 跑（需 Docker Desktop），二进制取 `artex-*-windows-amd64.exe`；macOS 取对应的 `darwin-amd64` / `darwin-arm64`。
+
+> Release 里只有二进制；`skills/` 等运行期目录会在首次启动时自动创建。想用仓库里的 `start.sh`（页内一键更新 + 守护）也仍然可以，两者退出码协议一致。
 
 ### 方式四：从源码编译单二进制
 
